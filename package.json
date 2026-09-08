@@ -8,6 +8,9 @@
     ".": {
       "default": "./lib/index.js"
     },
+    "./adapters/*": {
+      "default": "./adapters/*"
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -16,17 +19,34 @@
     "LICENSE",
     "README.md"
   ],
+  "scripts": {
+    "test": "node --test \"test/**/*.test.js\""
+  },
+  "engines": {
+    "node": ">=18"
+  },
   "license": "MIT",
   "keywords": [
     "llm",
+    "ai",
     "openai",
+    "anthropic",
+    "claude",
+    "gemini",
+    "deepseek",
+    "groq",
+    "openrouter",
     "api-key",
-    "rate-limit",
-    "fallback",
-    "failover",
     "key-rotation",
-    "token-limit",
-    "429"
+    "rate-limit",
+    "rate-limiting",
+    "429",
+    "retry",
+    "failover",
+    "fallback",
+    "resilience",
+    "quota",
+    "pool"
   ],
   "repository": {
     "type": "git",

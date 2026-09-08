@@ -8,6 +8,7 @@ Never let a `429 Too Many Requests` kill your long-running task again.
 
 [![CI](https://github.com/caizefan34/llm-keyrot/actions/workflows/ci.yml/badge.svg)](https://github.com/caizefan34/llm-keyrot/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/llm-keyrot)](https://www.npmjs.com/package/llm-keyrot)
+[![npm downloads](https://img.shields.io/npm/dm/llm-keyrot)](https://www.npmjs.com/package/llm-keyrot)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![no dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](package.json)
 
@@ -15,7 +16,7 @@ Never let a `429 Too Many Requests` kill your long-running task again.
 
 </div>
 
----
+***
 
 ## The problem
 
@@ -71,24 +72,29 @@ request → 429 / RATE_LIMIT / QUOTA
 
 ## Why this one
 
-| | llm-keyrot | SDK built-in retry | LiteLLM / Portkey |
-|---|---|---|---|
-| Rotates to a *different key* on 429 | ✅ | ❌ same key | ✅ |
-| Zero dependencies | ✅ | — | ❌ |
-| Runs in-process, no proxy / gateway | ✅ | — | ❌ |
-| Drops into existing code (3 lines) | ✅ | ✅ | ❌ rewrite |
-| Works with any provider / any HTTP client | ✅ | — | partial |
-| Waits instead of failing when all keys cool | ✅ | ❌ | ✅ |
-| Cross-provider fallback | ✅ | ❌ | ✅ |
-| Keys stay in your process | ✅ | ✅ | ❌ sent to gateway |
+| <br />                                      | llm-keyrot | SDK built-in retry | LiteLLM / Portkey |
+| ------------------------------------------- | ---------- | ------------------ | ----------------- |
+| Rotates to a *different key* on 429         | ✅          | ❌ same key         | ✅                 |
+| Zero dependencies                           | ✅          | —                  | ❌                 |
+| Runs in-process, no proxy / gateway         | ✅          | —                  | ❌                 |
+| Drops into existing code (3 lines)          | ✅          | ✅                  | ❌ rewrite         |
+| Works with any provider / any HTTP client   | ✅          | —                  | partial           |
+| Waits instead of failing when all keys cool | ✅          | ❌                  | ✅                 |
+| Cross-provider fallback                     | ✅          | ❌                  | ✅                 |
+| Keys stay in your process                   | ✅          | ✅                  | ❌ sent to gateway |
 
 Key properties:
 
-- **Zero dependencies** — pure ESM JavaScript, ~3 KB. Audit-friendly, install-friendly.
+- **Zero dependencies** — pure ESM JavaScript, \~3 KB. Audit-friendly, install-friendly.
+
 - **Not a proxy** — no extra hop, no gateway to deploy, no key escrow. Your keys never leave your process.
+
 - **Provider-agnostic** — anything that can return a status code works: OpenAI, Anthropic, Gemini, DeepSeek, Groq, OpenRouter, internal gateways…
+
 - **Concurrency-safe** — parallel failures on the same provider are serialized; you never activate two keys at once.
-- **Respects `Retry-After`** — per-key cooldown uses the server's hint when present (clamped to 1s–3min).
+
+- **Respects** **`Retry-After`** — per-key cooldown uses the server's hint when present (clamped to 1s–3min).
+
 - **Cancellable** — every wait accepts an `AbortSignal`.
 
 ## Install
@@ -192,13 +198,13 @@ const apiCall = createRetryInterceptor(rotator, 'openai', async (url, opts) => {
 
 ### `new KeyRotator(options)`
 
-| Option | Type | Description |
-|---|---|---|
-| `providers` | `object` | Provider configs, keyed by id. Each value: `{ activeKey, pool, cooldownMs? }` |
-| `fallbacks` | `object` (optional) | Fallback routes, keyed by provider id. Each value: `{ provider, model }` |
-| `onActivate` | `(key) => void \| Promise<void>` | Called when a new key should become active |
-| `onDeactivate` | `(key) => void \| Promise<void>` | Optional; called when a key is rotated out |
-| `logger` | `object` (optional) | Logger with `.info()`, `.warn()`. Defaults to `console` |
+| Option         | Type                             | Description                                                                   |
+| -------------- | -------------------------------- | ----------------------------------------------------------------------------- |
+| `providers`    | `object`                         | Provider configs, keyed by id. Each value: `{ activeKey, pool, cooldownMs? }` |
+| `fallbacks`    | `object` (optional)              | Fallback routes, keyed by provider id. Each value: `{ provider, model }`      |
+| `onActivate`   | `(key) => void \| Promise<void>` | Called when a new key should become active                                    |
+| `onDeactivate` | `(key) => void \| Promise<void>` | Optional; called when a key is rotated out                                    |
+| `logger`       | `object` (optional)              | Logger with `.info()`, `.warn()`. Defaults to `console`                       |
 
 ### `rotator.onRateLimit(provider, failure, signal?)`
 
@@ -220,23 +226,23 @@ Cancels all pending cooldown waits and fallback timers.
 
 ## Provider config
 
-| Field | Required | Default | Description |
-|---|---|---|---|
-| `activeKey` | yes | — | The key currently in use; every request should use this |
-| `pool` | no | `[]` | Additional keys to rotate through when the active key is rate-limited |
-| `cooldownMs` | no | `60000` | How long to cool down a key after a rate limit (ms) |
+| Field        | Required | Default | Description                                                           |
+| ------------ | -------- | ------- | --------------------------------------------------------------------- |
+| `activeKey`  | yes      | —       | The key currently in use; every request should use this               |
+| `pool`       | no       | `[]`    | Additional keys to rotate through when the active key is rate-limited |
+| `cooldownMs` | no       | `60000` | How long to cool down a key after a rate limit (ms)                   |
 
 ## Design decisions
 
-| Decision | Rationale |
-|---|---|
-| **React to 429 / `RATE_LIMIT` / `QUOTA`** | Not round-robin or pre-emptive — only rotate when a limit is actually hit |
-| **Per-key cooldown** | Respects server `Retry-After` headers; falls back to a sane default |
-| **Wait when all keys are cooling** | A rate limit is transient; the task shouldn't fail because of a burst |
-| **Cross-provider fallback** | If one API service is fully exhausted, route to a backup transparently |
-| **Serialized rotation per provider** | Concurrent failures don't race and activate two keys at once |
-| **Cancellable waits** | Clean disposal: an `AbortSignal` cuts through any pending cooldown |
-| **Zero dependencies** | You're adding resilience, not a dependency tree |
+| Decision                                              | Rationale                                                                 |
+| ----------------------------------------------------- | ------------------------------------------------------------------------- |
+| **React to 429 /** **`RATE_LIMIT`** **/** **`QUOTA`** | Not round-robin or pre-emptive — only rotate when a limit is actually hit |
+| **Per-key cooldown**                                  | Respects server `Retry-After` headers; falls back to a sane default       |
+| **Wait when all keys are cooling**                    | A rate limit is transient; the task shouldn't fail because of a burst     |
+| **Cross-provider fallback**                           | If one API service is fully exhausted, route to a backup transparently    |
+| **Serialized rotation per provider**                  | Concurrent failures don't race and activate two keys at once              |
+| **Cancellable waits**                                 | Clean disposal: an `AbortSignal` cuts through any pending cooldown        |
+| **Zero dependencies**                                 | You're adding resilience, not a dependency tree                           |
 
 ## FAQ
 
@@ -256,7 +262,7 @@ Issues and PRs are welcome. Run tests with `npm test` (zero-dependency `node:tes
 
 MIT
 
----
+***
 
 <div align="center">
 

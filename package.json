@@ -1,0 +1,39 @@
+{
+  "name": "llm-keyrot",
+  "version": "0.2.0",
+  "description": "Auto-failover API key pool for LLM providers — when one key hits a rate limit, rotate to the next; when all keys are exhausted, wait for recovery; optionally fall back to another provider.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "adapters",
+    "LICENSE",
+    "README.md"
+  ],
+  "license": "MIT",
+  "keywords": [
+    "llm",
+    "openai",
+    "api-key",
+    "rate-limit",
+    "fallback",
+    "failover",
+    "key-rotation",
+    "token-limit",
+    "429"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/caizefan34/llm-keyrot.git"
+  },
+  "bugs": {
+    "url": "https://github.com/caizefan34/llm-keyrot/issues"
+  },
+  "homepage": "https://github.com/caizefan34/llm-keyrot#readme"
+}

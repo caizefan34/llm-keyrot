@@ -1,15 +1,21 @@
 {
   "name": "llm-keyrot",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Zero-dependency, in-process API key rotation for LLM providers with 429 recovery and optional cross-provider fallback.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
     ".": {
+      "types": "./lib/index.d.ts",
       "default": "./lib/index.js"
     },
+    "./adapters/*.js": {
+      "types": "./adapters/*.d.ts",
+      "default": "./adapters/*.js"
+    },
     "./adapters/*": {
-      "default": "./adapters/*"
+      "types": "./adapters/*.d.ts",
+      "default": "./adapters/*.js"
     },
     "./package.json": "./package.json"
   },
@@ -61,5 +67,6 @@
   "bugs": {
     "url": "https://github.com/caizefan34/llm-keyrot/issues"
   },
-  "homepage": "https://github.com/caizefan34/llm-keyrot#readme"
+  "homepage": "https://github.com/caizefan34/llm-keyrot#readme",
+  "types": "./lib/index.d.ts"
 }

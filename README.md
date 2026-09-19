@@ -2,9 +2,13 @@
 
 # llm-keyrot
 
-**Zero-dependency, in-process API key rotation for LLM apps (Node.js / JavaScript).**
+## 429 shouldn't crash your LLM app.
 
-Recover from `429` without adding a gateway: rotate keys, honor `Retry-After`, and optionally fail over to another provider.
+**Zero-dependency, in-process key rotation and provider failover for Node.js.**
+
+**No proxy. No gateway. No runtime dependencies.**
+
+`request → 429 → honor Retry-After → cooldown current key → rotate → retry → 200 OK`
 
 [![CI](https://github.com/caizefan34/llm-keyrot/actions/workflows/ci.yml/badge.svg)](https://github.com/caizefan34/llm-keyrot/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/llm-keyrot)](https://www.npmjs.com/package/llm-keyrot)
@@ -21,15 +25,17 @@ It keeps retry logic inside your process, with **no runtime dependencies** and *
 
 ## Why use it
 
-- Your current request got `429` / quota → rotate to another key in the same provider.
+- Your request hit `429` → respect `Retry-After`, cool down the current key, and rotate to another authorized key in the same provider.
 - All keys are cooling down → wait for the earliest recovery instead of failing immediately.
-- One provider is repeatedly exhausted → temporarily route to a fallback provider/model.
+- One provider is repeatedly rate-limited → temporarily route to a fallback provider/model.
 
 ## 30-second runnable demo (no real API key required)
 
 ```bash
 node examples/mock-rotation-demo.js
 node examples/mock-fallback-demo.js
+node examples/anthropic-integration-demo.js
+node examples/gemini-integration-demo.js
 ```
 
 Both demos are deterministic and safe for a fresh clone.
@@ -46,6 +52,7 @@ Both demos are deterministic and safe for a fresh clone.
 - [Cross-provider fallback route](#cross-provider-fallback-route)
 - [Configuration reference](#configuration-reference)
 - [Error handling, retry limit, and idempotency](#error-handling-retry-limit-and-idempotency)
+- [llm-keyrot vs gateway](#llm-keyrot-vs-gateway)
 - [When not to use llm-keyrot](#when-not-to-use-llm-keyrot)
 - [Performance and behavior boundaries](#performance-and-behavior-boundaries)
 - [Troubleshooting](#troubleshooting)
@@ -220,6 +227,11 @@ console.log(rotator.getRoute('openai', 'gpt-4o-mini'))
 - Non-rate-limit errors (for example `500`, auth errors, validation errors) are **not swallowed**.
 - Retrying can re-send requests; only auto-retry idempotent operations unless your application can tolerate duplicates.
 
+## llm-keyrot vs gateway
+
+- Use **llm-keyrot** when your app only needs **in-process retry, cooldown, API-key rotation, and optional provider fallback**.
+- Use an **LLM gateway** when you need **centralized billing, governance, observability, or cross-service coordination**.
+
 ## When not to use llm-keyrot
 
 - You need centralized cross-team quota governance, billing aggregation, or policy enforcement at the gateway layer.
@@ -263,6 +275,8 @@ No. Adapters retry only rate-limit failures up to `maxRetries`.
 - [Discovery metadata suggestions (topics/about)](./docs/discovery.md)
 - [Deterministic key-rotation demo](./examples/mock-rotation-demo.js)
 - [Deterministic fallback demo](./examples/mock-fallback-demo.js)
+- [Deterministic Anthropic integration demo](./examples/anthropic-integration-demo.js)
+- [Deterministic Gemini integration demo](./examples/gemini-integration-demo.js)
 - [Legacy real-provider standalone example](./examples/standalone.js)
 
 ## License

@@ -3,6 +3,9 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { existsSync, readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { KeyRotator, isRateLimited, cancellableDelay } from '../lib/index.js'
 import { createRetryInterceptor, parseRetryAfterMs } from '../adapters/http-interceptor.js'
 import { wrapOpenAI } from '../adapters/openai-node.js'
@@ -312,4 +315,32 @@ test('openai adapter retries rate limits and rethrows non-rate-limit errors', as
   }
   wrapOpenAI(fatalClient, rotator, 'openai', { maxRetries: 1 })
   await assert.rejects(fatalClient.chat.completions.create({}), /fatal/)
+})
+
+test('package exports include TypeScript declarations for root and adapters', () => {
+  const pkgPath = new URL('../package.json', import.meta.url)
+  const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
+
+  assert.equal(pkg.types, './lib/index.d.ts')
+  assert.equal(pkg.exports['.'].types, './lib/index.d.ts')
+  assert.equal(pkg.exports['./adapters/*.js'].types, './adapters/*.d.ts')
+
+  assert.equal(existsSync(new URL('../lib/index.d.ts', import.meta.url)), true)
+  assert.equal(existsSync(new URL('../adapters/http-interceptor.d.ts', import.meta.url)), true)
+  assert.equal(existsSync(new URL('../adapters/openai-node.d.ts', import.meta.url)), true)
+  assert.equal(existsSync(new URL('../adapters/dsh.d.ts', import.meta.url)), true)
+})
+
+test('deterministic anthropic and gemini integration demos run without credentials', () => {
+  const anthropic = spawnSync(process.execPath, [fileURLToPath(new URL('../examples/anthropic-integration-demo.js', import.meta.url))], {
+    encoding: 'utf8',
+  })
+  assert.equal(anthropic.status, 0, anthropic.stderr)
+  assert.match(anthropic.stdout, /\[anthropic-demo\] final result:/)
+
+  const gemini = spawnSync(process.execPath, [fileURLToPath(new URL('../examples/gemini-integration-demo.js', import.meta.url))], {
+    encoding: 'utf8',
+  })
+  assert.equal(gemini.status, 0, gemini.stderr)
+  assert.match(gemini.stdout, /\[gemini-demo\] final result:/)
 })

@@ -21,6 +21,41 @@
  * @module llm-keyrot/adapters/http-interceptor
  */
 
+import { isRateLimited } from '../lib/index.js'
+
+function readHeader(headers, name) {
+  if (!headers) return undefined
+  if (typeof headers.get === 'function') return headers.get(name) ?? undefined
+  const lowered = name.toLowerCase()
+  for (const [k, v] of Object.entries(headers)) {
+    if (k.toLowerCase() === lowered) return v
+  }
+  return undefined
+}
+
+/**
+ * Parse Retry-After / retry-after-ms headers to milliseconds.
+ * @param {object|Headers|undefined} headers
+ * @returns {number|undefined}
+ */
+export function parseRetryAfterMs(headers) {
+  const retryAfterMs = Number(readHeader(headers, 'retry-after-ms'))
+  if (Number.isFinite(retryAfterMs) && retryAfterMs > 0) return retryAfterMs
+
+  const retryAfter = readHeader(headers, 'retry-after')
+  if (retryAfter == null) return undefined
+
+  const asSeconds = Number(retryAfter)
+  if (Number.isFinite(asSeconds) && asSeconds > 0) return asSeconds * 1000
+
+  const asDateMs = Date.parse(String(retryAfter))
+  if (!Number.isNaN(asDateMs)) {
+    const delta = asDateMs - Date.now()
+    if (delta > 0) return delta
+  }
+  return undefined
+}
+
 /**
  * Create a request function that automatically retries on 429 with key
  * rotation.
@@ -47,19 +82,20 @@ export function createRetryInterceptor(rotator, providerId, sendRequest, options
         const action = await rotator.onRateLimit(providerId, {
           status: response.status,
           code: response.status === 429 ? 'RATE_LIMIT' : undefined,
-          providerRetryAfterMs: response.headers?.['retry-after-ms']
-            ? Number(response.headers['retry-after-ms'])
-            : undefined,
+          providerRetryAfterMs: parseRetryAfterMs(response.headers),
         })
 
         if (!action) return response.body  // No recovery — return the error body
         // Continue to retry with the new key
       } catch (err) {
         lastError = err
-        const action = await rotator.onRateLimit(providerId, {
+        const failure = {
           status: err?.status ?? err?.response?.status,
-          code: err?.code,
-        })
+          code: err?.code ?? err?.response?.data?.error?.code,
+          providerRetryAfterMs: parseRetryAfterMs(err?.response?.headers),
+        }
+        if (!isRateLimited(failure)) throw err
+        const action = await rotator.onRateLimit(providerId, failure)
         if (!action) throw err
       }
     }

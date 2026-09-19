@@ -2,100 +2,56 @@
 
 # llm-keyrot
 
-**Zero-dependency API key rotation for LLM providers.**
+**Zero-dependency, in-process API key rotation for LLM apps (Node.js / JavaScript).**
 
-Never let a `429 Too Many Requests` kill your long-running task again.
+Recover from `429` without adding a gateway: rotate keys, honor `Retry-After`, and optionally fail over to another provider.
 
 [![CI](https://github.com/caizefan34/llm-keyrot/actions/workflows/ci.yml/badge.svg)](https://github.com/caizefan34/llm-keyrot/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/llm-keyrot)](https://www.npmjs.com/package/llm-keyrot)
 [![npm downloads](https://img.shields.io/npm/dm/llm-keyrot)](https://www.npmjs.com/package/llm-keyrot)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![no dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](package.json)
+[![dependencies](https://img.shields.io/badge/runtime%20dependencies-0-brightgreen)](package.json)
 
-**Works with OpenAI, Anthropic, Gemini, DeepSeek, Groq, OpenRouter, and any HTTP LLM API.**
+<img src="./assets/social-preview.jpg" alt="llm-keyrot social preview" width="720" />
 
 </div>
 
-***
+`llm-keyrot` is a **provider-agnostic** helper for developers building LLM apps, batch jobs, agents, and eval scripts with Node.js.  
+It keeps retry logic inside your process, with **no runtime dependencies** and **no external key gateway**.
 
-## The problem
+## Why use it
 
-You're running a long LLM task — a batch of translations, an eval harness, a multi-step agent. Then:
+- Your current request got `429` / quota → rotate to another key in the same provider.
+- All keys are cooling down → wait for the earliest recovery instead of failing immediately.
+- One provider is repeatedly exhausted → temporarily route to a fallback provider/model.
 
-```
-429 Too Many Requests
-```
+## 30-second runnable demo (no real API key required)
 
-The SDK's built-in retry uses **the same key**, hits **the same limit**, and fails. Your 3-hour job dies at hour 2.
-
-## The fix
-
-Pool your keys. When one hits a rate limit, rotate to the next. When *all* of them are cooling, **wait** for the soonest to recover instead of failing. Optionally fall back to a different provider entirely.
-
-```js
-import { KeyRotator } from 'llm-keyrot'
-
-let currentKey = process.env.OPENAI_API_KEY
-
-const rotator = new KeyRotator({
-  providers: {
-    openai: {
-      activeKey: currentKey,
-      pool: [process.env.OPENAI_KEY_2, process.env.OPENAI_KEY_3].filter(Boolean),
-      cooldownMs: 30_000,
-    },
-  },
-  onActivate(key) { currentKey = key },
-})
-
-// In your fetch wrapper — that's the whole integration:
-if (res.status === 429) {
-  const action = await rotator.onRateLimit('openai', { status: 429 })
-  if (action?.kind === 'retry') return llmCall(body)   // retried with a fresh key
-}
+```bash
+node examples/mock-rotation-demo.js
+node examples/mock-fallback-demo.js
 ```
 
-## How it works
+Both demos are deterministic and safe for a fresh clone.
 
-```
-request → 429 / RATE_LIMIT / QUOTA
-  ↓
-[llm-keyrot]
-  1. Cool down the failed key   (default 60s, or the server's Retry-After)
-  2. Scan the key pool          [activeKey, key1, key2, …] (deduplicated)
-     ├─ Found a non-cooled key → switch to it → retry
-     └─ All keys cooling        → wait for the soonest to recover → retry
-  Never fails the step on a rate limit.
-```
+---
 
-**Cross-provider fallback:** after consecutive rate limits exhaust all keys for one provider, subsequent requests are transparently routed to a fallback provider + model. A recovery timer retries the original provider later.
+## Table of contents
 
-## Why this one
-
-| <br />                                      | llm-keyrot | SDK built-in retry | LiteLLM / Portkey |
-| ------------------------------------------- | ---------- | ------------------ | ----------------- |
-| Rotates to a *different key* on 429         | ✅          | ❌ same key         | ✅                 |
-| Zero dependencies                           | ✅          | —                  | ❌                 |
-| Runs in-process, no proxy / gateway         | ✅          | —                  | ❌                 |
-| Drops into existing code (3 lines)          | ✅          | ✅                  | ❌ rewrite         |
-| Works with any provider / any HTTP client   | ✅          | —                  | partial           |
-| Waits instead of failing when all keys cool | ✅          | ❌                  | ✅                 |
-| Cross-provider fallback                     | ✅          | ❌                  | ✅                 |
-| Keys stay in your process                   | ✅          | ✅                  | ❌ sent to gateway |
-
-Key properties:
-
-- **Zero dependencies** — pure ESM JavaScript, \~3 KB. Audit-friendly, install-friendly.
-
-- **Not a proxy** — no extra hop, no gateway to deploy, no key escrow. Your keys never leave your process.
-
-- **Provider-agnostic** — anything that can return a status code works: OpenAI, Anthropic, Gemini, DeepSeek, Groq, OpenRouter, internal gateways…
-
-- **Concurrency-safe** — parallel failures on the same provider are serialized; you never activate two keys at once.
-
-- **Respects** **`Retry-After`** — per-key cooldown uses the server's hint when present (clamped to 1s–3min).
-
-- **Cancellable** — every wait accepts an `AbortSignal`.
+- [Install](#install)
+- [Requirements and safety model](#requirements-and-safety-model)
+- [Quickstart: minimal fetch integration](#quickstart-minimal-fetch-integration)
+- [OpenAI SDK integration](#openai-sdk-integration)
+- [Generic HTTP / axios style integration](#generic-http--axios-style-integration)
+- [Cross-provider fallback route](#cross-provider-fallback-route)
+- [Configuration reference](#configuration-reference)
+- [Error handling, retry limit, and idempotency](#error-handling-retry-limit-and-idempotency)
+- [When not to use llm-keyrot](#when-not-to-use-llm-keyrot)
+- [Performance and behavior boundaries](#performance-and-behavior-boundaries)
+- [Troubleshooting](#troubleshooting)
+- [Security notes](#security-notes)
+- [FAQ](#faq)
+- [Docs and examples](#docs-and-examples)
 
 ## Install
 
@@ -103,169 +59,212 @@ Key properties:
 npm install llm-keyrot
 ```
 
-Node.js ≥ 18 (uses global `fetch`, `AbortSignal`, timers).
+> If this package helps your production scripts, please consider starring the repo and using it from npm.
 
-## Quick start
+## Requirements and safety model
 
-### Standalone (any provider, any HTTP client)
+- **Node.js >= 18**
+- **Pure ESM** (`"type": "module"`)
+- **Zero runtime dependencies**
+- `llm-keyrot` does **not** proxy network traffic and does **not** send your API keys to any external gateway.
+
+## Quickstart: minimal fetch integration
 
 ```js
 import { KeyRotator } from 'llm-keyrot'
 
-let currentKey = process.env.OPENAI_API_KEY
+let activeKey = process.env.OPENAI_API_KEY
 
 const rotator = new KeyRotator({
   providers: {
     openai: {
-      activeKey: currentKey,
+      activeKey,
       pool: [process.env.OPENAI_KEY_2, process.env.OPENAI_KEY_3].filter(Boolean),
-      cooldownMs: 30_000,      // 30s per key
+      cooldownMs: 30_000,
     },
   },
-  onActivate(key) { currentKey = key },
+  onActivate(nextKey) {
+    activeKey = nextKey
+  },
 })
 
-async function llmCall(body) {
+async function callOpenAI(body) {
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
-    headers: { 'Authorization': `Bearer ${currentKey}`, 'Content-Type': 'application/json' },
+    headers: {
+      Authorization: '******',
+      'Content-Type': 'application/json',
+    },
     body: JSON.stringify(body),
   })
+
   if (res.status === 429) {
     const action = await rotator.onRateLimit('openai', { status: 429 })
-    if (action?.kind === 'retry') return llmCall(body)  // retry with new key
+    if (action?.kind === 'retry') return callOpenAI(body)
   }
+
   return res.json()
 }
 ```
 
-### With the OpenAI Node SDK
+## OpenAI SDK integration
 
 ```js
 import OpenAI from 'openai'
 import { KeyRotator } from 'llm-keyrot'
 import { wrapOpenAI } from 'llm-keyrot/adapters/openai-node.js'
 
+const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+
 const rotator = new KeyRotator({
   providers: {
-    default: {
+    openai: {
       activeKey: process.env.OPENAI_API_KEY,
       pool: [process.env.OPENAI_KEY_2].filter(Boolean),
       cooldownMs: 30_000,
     },
   },
-  onActivate(key) { client.apiKey = key },
+  onActivate(nextKey) {
+    client.apiKey = nextKey
+  },
 })
 
-const client = wrapOpenAI(new OpenAI(), rotator, 'default')
-// client.chat.completions.create now retries with key rotation on 429
+wrapOpenAI(client, rotator, 'openai', { maxRetries: 3 })
 ```
 
-### With fetch / axios
+## Generic HTTP / axios style integration
 
 ```js
 import { KeyRotator } from 'llm-keyrot'
 import { createRetryInterceptor } from 'llm-keyrot/adapters/http-interceptor.js'
 
-const rotator = new KeyRotator({ ... })
-
-const apiCall = createRetryInterceptor(rotator, 'openai', async (url, opts) => {
-  const res = await fetch(url, opts)
-  return { status: res.status, headers: Object.fromEntries(res.headers), body: await res.json() }
+const rotator = new KeyRotator({
+  providers: {
+    providerA: {
+      activeKey: process.env.PROVIDER_A_KEY,
+      pool: [process.env.PROVIDER_A_KEY_2].filter(Boolean),
+      cooldownMs: 15_000,
+    },
+  },
+  onActivate() {},
 })
+
+const sendWithRetry = createRetryInterceptor(
+  rotator,
+  'providerA',
+  async (url, options) => {
+    const res = await fetch(url, options)
+    return {
+      status: res.status,
+      headers: Object.fromEntries(res.headers),
+      body: await res.json(),
+    }
+  },
+  { maxRetries: 3 }
+)
 ```
 
-### With DeepSeek Harness (DSH)
+## Cross-provider fallback route
 
-```yaml
-# ~/.dsh/profiles/<name>/cordis.patch.yml
-- insert:
-    - id: llm-keyrot
-      name: 'llm-keyrot'
-      config:
-        providers:
-          my-provider:
-            activeRef: "MY_API_KEY"
-            poolPrefix: "MY_POOL_"
-            cooldownMs: 60000
-        fallbacks:
-          my-provider:
-            provider: "fallback-provider"
-            model: "gpt-4"
+```js
+import { KeyRotator } from 'llm-keyrot'
+
+const rotator = new KeyRotator({
+  providers: {
+    openai: { activeKey: 'k1', pool: ['k2'], cooldownMs: 1000 },
+    anthropic: { activeKey: 'a1', pool: ['a2'], cooldownMs: 1000 },
+  },
+  fallbacks: {
+    openai: { provider: 'anthropic', model: 'claude-3-5-sonnet' },
+  },
+  onActivate() {},
+})
+
+await rotator.onRateLimit('openai', { status: 429 })
+await rotator.onRateLimit('openai', { status: 429 })
+await rotator.onRateLimit('openai', { status: 429 })
+
+console.log(rotator.getRoute('openai', 'gpt-4o-mini'))
+// -> { provider: 'anthropic', model: 'claude-3-5-sonnet' }
 ```
 
-## API
+## Configuration reference
 
 ### `new KeyRotator(options)`
 
-| Option         | Type                             | Description                                                                   |
-| -------------- | -------------------------------- | ----------------------------------------------------------------------------- |
-| `providers`    | `object`                         | Provider configs, keyed by id. Each value: `{ activeKey, pool, cooldownMs? }` |
-| `fallbacks`    | `object` (optional)              | Fallback routes, keyed by provider id. Each value: `{ provider, model }`      |
-| `onActivate`   | `(key) => void \| Promise<void>` | Called when a new key should become active                                    |
-| `onDeactivate` | `(key) => void \| Promise<void>` | Optional; called when a key is rotated out                                    |
-| `logger`       | `object` (optional)              | Logger with `.info()`, `.warn()`. Defaults to `console`                       |
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `providers` | `Record<string, { activeKey: string, pool?: string[], cooldownMs?: number }>` | yes | provider map |
+| `fallbacks` | `Record<string, { provider: string, model: string }>` | no | fallback route map |
+| `onActivate` | `(nextKey: string) => void \| Promise<void>` | yes | set active key in your client/env |
+| `onDeactivate` | `(prevKey: string) => void \| Promise<void>` | no | called after successful rotation |
+| `logger` | `{ info?: Function, warn?: Function }` | no | defaults to `console` |
 
-### `rotator.onRateLimit(provider, failure, signal?)`
+### Methods
 
-Returns `{ kind: 'retry' }` if the call should be retried, or `undefined` if recovery failed.
+- `await rotator.onRateLimit(provider, failure, signal?)`
+  - handles `status: 429` and common rate-limit codes.
+  - supports `failure.providerRetryAfterMs` for server hints.
+  - returns `{ kind: 'retry' }` or `undefined`.
+- `rotator.getRoute(provider, model)` → resolved provider/model with fallback applied.
+- `rotator.isInFallback(provider)` → whether provider is in fallback mode.
+- `rotator.dispose()` → cancel fallback timers and waiting cooldown retries.
 
-`failure` accepts `{ status }` (HTTP status), `{ code }` (`RATE_LIMIT` / `QUOTA`), and an optional `providerRetryAfterMs` hint (e.g. from a `Retry-After` header).
+## Error handling, retry limit, and idempotency
 
-### `rotator.getRoute(provider, model)`
+- `createRetryInterceptor(..., { maxRetries })` and `wrapOpenAI(..., { maxRetries })` enforce a maximum retry count.
+- `Retry-After` is parsed from:
+  - `retry-after-ms`
+  - `retry-after` seconds
+  - `retry-after` HTTP-date
+- Non-rate-limit errors (for example `500`, auth errors, validation errors) are **not swallowed**.
+- Retrying can re-send requests; only auto-retry idempotent operations unless your application can tolerate duplicates.
 
-Returns `{ provider, model }` — the resolved route after applying fallback logic.
+## When not to use llm-keyrot
 
-### `rotator.isInFallback(provider)`
+- You need centralized cross-team quota governance, billing aggregation, or policy enforcement at the gateway layer.
+- You must coordinate key state across many independent processes/hosts via shared storage.
+- You cannot accept any automatic retries in your workflow.
 
-Returns `true` if the provider is currently in cross-provider fallback mode.
+## Performance and behavior boundaries
 
-### `rotator.dispose()`
+- Rotation state is in-process memory only.
+- Rotation is serialized per provider to avoid concurrent key activation races.
+- Cooldown hints are clamped to a safe range in core logic.
+- Fallback mode auto-recovers after a timer; it is not a permanent circuit breaker.
 
-Cancels all pending cooldown waits and fallback timers.
+## Troubleshooting
 
-## Provider config
+- **No rotation happens**: ensure your code calls `onRateLimit` on 429 or mapped rate-limit failures.
+- **Wrong key still used**: verify `onActivate` actually updates the key used by your HTTP client/SDK.
+- **Unexpected retries**: lower `maxRetries` in adapters or call `dispose()` when shutting down.
+- **Import errors**: this package is ESM only. Use `import`, not `require`.
 
-| Field        | Required | Default | Description                                                           |
-| ------------ | -------- | ------- | --------------------------------------------------------------------- |
-| `activeKey`  | yes      | —       | The key currently in use; every request should use this               |
-| `pool`       | no       | `[]`    | Additional keys to rotate through when the active key is rate-limited |
-| `cooldownMs` | no       | `60000` | How long to cool down a key after a rate limit (ms)                   |
+## Security notes
 
-## Design decisions
-
-| Decision                                              | Rationale                                                                 |
-| ----------------------------------------------------- | ------------------------------------------------------------------------- |
-| **React to 429 /** **`RATE_LIMIT`** **/** **`QUOTA`** | Not round-robin or pre-emptive — only rotate when a limit is actually hit |
-| **Per-key cooldown**                                  | Respects server `Retry-After` headers; falls back to a sane default       |
-| **Wait when all keys are cooling**                    | A rate limit is transient; the task shouldn't fail because of a burst     |
-| **Cross-provider fallback**                           | If one API service is fully exhausted, route to a backup transparently    |
-| **Serialized rotation per provider**                  | Concurrent failures don't race and activate two keys at once              |
-| **Cancellable waits**                                 | Clean disposal: an `AbortSignal` cuts through any pending cooldown        |
-| **Zero dependencies**                                 | You're adding resilience, not a dependency tree                           |
+- Never commit real API keys.
+- Avoid logging full keys; only log masked key ids.
+- See [SECURITY.md](./SECURITY.md) for reporting guidance.
 
 ## FAQ
 
-**Why not just the SDK's retry?** SDK retries back off and retry with the *same* key — against a per-key limit that's a countdown to failure. Rotation switches to a key that still has quota.
+**Does llm-keyrot send keys to an external service?**  
+No. It is in-process logic only.
 
-**Does it make requests for me?** No — you keep your own client (fetch, axios, SDK). llm-keyrot only decides *which key* should be active and *when* to retry. No wrapping proxy, no behavior change on the happy path.
+**Can I use it without OpenAI SDK?**  
+Yes. The core `KeyRotator` works with any HTTP client.
 
-**Where do keys live?** In your process, wherever you put them. llm-keyrot never logs full keys (they're masked) and never sends them anywhere.
+**Will it retry every error automatically?**  
+No. Adapters retry only rate-limit failures up to `maxRetries`.
 
-**Multiple providers?** Yes — pass several entries in `providers` and handle each one's failures with `onRateLimit('<id>', …)`.
+## Docs and examples
 
-## Contributing
-
-Issues and PRs are welcome. Run tests with `npm test` (zero-dependency `node:test`).
+- [Quickstart guide](./docs/quickstart.md)
+- [Discovery metadata suggestions (topics/about)](./docs/discovery.md)
+- [Deterministic key-rotation demo](./examples/mock-rotation-demo.js)
+- [Deterministic fallback demo](./examples/mock-fallback-demo.js)
+- [Legacy real-provider standalone example](./examples/standalone.js)
 
 ## License
 
 MIT
-
-***
-
-<div align="center">
-
-**If this saved your batch job, ⭐ star the repo — it helps others find it.**
-
-</div>

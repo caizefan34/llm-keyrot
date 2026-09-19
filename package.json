@@ -1,7 +1,7 @@
 {
   "name": "llm-keyrot",
   "version": "0.2.0",
-  "description": "Auto-failover API key pool for LLM providers — when one key hits a rate limit, rotate to the next; when all keys are exhausted, wait for recovery; optionally fall back to another provider.",
+  "description": "Zero-dependency, in-process API key rotation for LLM providers with 429 recovery and optional cross-provider fallback.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -17,7 +17,8 @@
     "lib",
     "adapters",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "test": "node --test test/index.test.js"
@@ -46,7 +47,12 @@
     "fallback",
     "resilience",
     "quota",
-    "pool"
+    "pool",
+    "nodejs",
+    "javascript",
+    "esm",
+    "zero-dependency",
+    "in-process"
   ],
   "repository": {
     "type": "git",

@@ -4,6 +4,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { KeyRotator, isRateLimited, cancellableDelay } from '../lib/index.js'
+import { createRetryInterceptor, parseRetryAfterMs } from '../adapters/http-interceptor.js'
+import { wrapOpenAI } from '../adapters/openai-node.js'
 
 /** Silent logger to keep test output clean. */
 const quiet = { info() {}, warn() {} }
@@ -24,6 +26,11 @@ test('isRateLimited ignores other failures', () => {
   assert.equal(isRateLimited({ code: 'SERVER_ERROR' }), false)
   assert.equal(isRateLimited(null), false)
   assert.equal(isRateLimited(undefined), false)
+})
+
+test('isRateLimited detects lowercase provider codes', () => {
+  assert.equal(isRateLimited({ code: 'rate_limit_exceeded' }), true)
+  assert.equal(isRateLimited({ code: 'insufficient_quota' }), true)
 })
 
 // ─── cancellableDelay ───────────────────────────────────────────────────────
@@ -63,6 +70,14 @@ test('onRateLimit rotates to the next pool key', async () => {
 test('onRateLimit returns undefined for unknown provider', async () => {
   const rotator = new KeyRotator({ providers: {}, onActivate() {} })
   assert.equal(await rotator.onRateLimit('nope', { status: 429 }), undefined)
+})
+
+test('onRateLimit ignores non-rate-limit failures', async () => {
+  const rotator = new KeyRotator({
+    providers: { p: { activeKey: 'key-a', pool: ['key-b'] } },
+    onActivate() {},
+  })
+  assert.equal(await rotator.onRateLimit('p', { status: 500 }), undefined)
 })
 
 test('onRateLimit returns undefined when pool is empty', async () => {
@@ -105,6 +120,12 @@ test('duplicate pool entries are deduplicated', () => {
   assert.deepEqual(pool, ['key-a', 'key-b'])
 })
 
+test('constructor validates required options', () => {
+  assert.throws(() => new KeyRotator(), /options object/)
+  assert.throws(() => new KeyRotator({}), /providers map/)
+  assert.throws(() => new KeyRotator({ providers: {} }), /onActivate callback/)
+})
+
 // ─── KeyRotator: cooldown & waiting ─────────────────────────────────────────
 
 test('waits for recovery when all keys are cooling', async () => {
@@ -131,6 +152,20 @@ test('aborted signal cancels the recovery wait', async () => {
   await rotator.onRateLimit('p', { status: 429 })   // rotate to key-b
   ctrl.abort()
   assert.equal(await rotator.onRateLimit('p', { status: 429 }, ctrl.signal), undefined)
+})
+
+test('dispose cancels pending recovery wait', async () => {
+  const rotator = new KeyRotator({
+    providers: { p: { activeKey: 'key-a', pool: ['key-b'], cooldownMs: 60_000 } },
+    onActivate() {},
+    logger: quiet,
+  })
+  await rotator.onRateLimit('p', { status: 429 }) // rotate to key-b
+  const start = Date.now()
+  const waiting = rotator.onRateLimit('p', { status: 429 })
+  setTimeout(() => rotator.dispose(), 20)
+  assert.equal(await waiting, undefined)
+  assert.ok(Date.now() - start < 500, 'dispose should abort without waiting minimum cooldown')
 })
 
 test('providerRetryAfterMs hint is respected and clamped', async () => {
@@ -201,4 +236,80 @@ test('concurrent failures are serialized without unhandled rejections', async ()
   // Each resolves without throwing; at least one rotation happened.
   assert.ok(activated.length >= 1)
   assert.ok(results.every((r) => r === undefined || r.kind === 'retry'))
+})
+
+// ─── adapters: retry-after parsing & retry behavior ──────────────────────────
+
+test('parseRetryAfterMs supports retry-after-ms, seconds, and HTTP date', () => {
+  assert.equal(parseRetryAfterMs({ 'retry-after-ms': '1500' }), 1500)
+  assert.equal(parseRetryAfterMs({ 'Retry-After': '2' }), 2000)
+  const future = new Date(Date.now() + 2500).toUTCString()
+  const parsed = parseRetryAfterMs({ 'retry-after': future })
+  assert.ok(parsed >= 1000 && parsed <= 3000, `expected a positive delay from HTTP-date, got ${parsed}`)
+})
+
+test('http interceptor enforces maxRetries and keeps non-429 errors', async () => {
+  let calls = 0
+  const rotator = new KeyRotator({
+    providers: { p: { activeKey: 'key-a', pool: ['key-b'], cooldownMs: 0 } },
+    onActivate() {},
+    logger: quiet,
+  })
+
+  const request429 = createRetryInterceptor(rotator, 'p', async () => {
+    calls += 1
+    return { status: 429, headers: {}, body: { error: 'rate' } }
+  }, { maxRetries: 2 })
+  await assert.rejects(request429('https://example.invalid'), /after 2 retries/)
+  assert.equal(calls, 3)
+
+  const fatal = createRetryInterceptor(rotator, 'p', async () => {
+    const err = new Error('server exploded')
+    err.status = 500
+    throw err
+  })
+  await assert.rejects(fatal('https://example.invalid'), /server exploded/)
+})
+
+test('openai adapter retries rate limits and rethrows non-rate-limit errors', async () => {
+  let attempts = 0
+  const client = {
+    chat: {
+      completions: {
+        async create() {
+          attempts += 1
+          if (attempts < 3) {
+            const err = new Error('rate')
+            err.status = 429
+            err.code = 'rate_limit_exceeded'
+            throw err
+          }
+          return { ok: true }
+        },
+      },
+    },
+  }
+
+  const rotator = new KeyRotator({
+    providers: { openai: { activeKey: 'key-a', pool: ['key-b'], cooldownMs: 0 } },
+    onActivate() {},
+    logger: quiet,
+  })
+  wrapOpenAI(client, rotator, 'openai', { maxRetries: 3 })
+  assert.deepEqual(await client.chat.completions.create({}), { ok: true })
+  assert.equal(attempts, 3)
+
+  const fatalClient = {
+    chat: {
+      completions: {
+        async create() {
+          const err = new Error('fatal')
+          err.status = 500
+          throw err
+        },
+      },
+    },
+  }
+  wrapOpenAI(fatalClient, rotator, 'openai', { maxRetries: 1 })
+  await assert.rejects(fatalClient.chat.completions.create({}), /fatal/)
 })

@@ -27,6 +27,9 @@
  * @module llm-keyrot/adapters/openai-node
  */
 
+import { isRateLimited } from '../lib/index.js'
+import { parseRetryAfterMs } from './http-interceptor.js'
+
 /**
  * Wrap an OpenAI client instance so chat completion calls automatically retry
  * with a rotated key on rate‑limit errors.
@@ -59,17 +62,14 @@ export function wrapOpenAI(client, rotator, providerId, options = {}) {
         // Check if this is a rate‑limit error
         const status = err?.status ?? err?.response?.status
         const code = err?.code ?? err?.error?.code
-        if (status !== 429 && code !== 'rate_limit_exceeded' && code !== 'insufficient_quota') {
-          throw err  // Non‑retryable — rethrow
-        }
-
-        const action = await rotator.onRateLimit(providerId, {
+        const failure = {
           status,
           code,
-          providerRetryAfterMs: err?.response?.headers?.['retry-after-ms']
-            ? Number(err.response.headers['retry-after-ms'])
-            : undefined,
-        })
+          providerRetryAfterMs: parseRetryAfterMs(err?.response?.headers),
+        }
+        if (!isRateLimited(failure)) throw err  // Non‑retryable — rethrow
+
+        const action = await rotator.onRateLimit(providerId, failure)
 
         if (!action) throw err  // No recovery path
         // Continue to retry with the new key
